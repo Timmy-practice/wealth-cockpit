@@ -218,6 +218,20 @@
                     </select>
                 </label>
 
+                <!-- v12 Google 雲端同步：資料存在使用者自己的 Google 雲端硬碟（隱藏的應用程式資料夾） -->
+                <div class="relative" id="cloud-wrap">
+                    <button type="button" id="cloud-btn" onclick="toggleCloudPanel()" class="px-3 py-1.5 rounded-xl themed-btn-secondary text-xs flex items-center gap-1.5 transition">
+                        <i class="fa-solid fa-cloud text-indigo-500"></i>
+                        <span class="hidden sm:inline">雲端同步</span>
+                    </button>
+                    <div id="cloud-panel" class="hidden absolute right-0 mt-2 w-80 glass-card rounded-2xl p-4 text-xs space-y-3 shadow-xl z-50" style="background: var(--card-bg)">
+                        <div class="font-bold text-sm">Google 雲端同步</div>
+                        <div id="cloud-status" class="leading-relaxed"></div>
+                        <div id="cloud-actions" class="flex flex-wrap gap-2"></div>
+                        <p class="themed-text-secondary leading-relaxed">資料存在你自己 Google 雲端硬碟裡的隱藏資料夾，只有這個網站讀得到；開發者看不到你的資料。換電腦或手機時，先在舊裝置按「上傳」，再到新裝置按「載入」。</p>
+                    </div>
+                </div>
+
                 <!-- Export Matrix & Import -->
                 <button onclick="exportXLSX()" class="px-3 py-1.5 rounded-xl themed-btn-secondary text-xs flex items-center gap-1.5 transition">
                     <i class="fa-solid fa-file-excel text-emerald-500"></i>
@@ -2669,6 +2683,200 @@
         }
 
         // localStorage 可能被瀏覽器封鎖（隱私模式、預覽環境），失敗時不影響畫面運作
+        // ===== v12 Google 雲端同步（手動）：存在使用者自己 Google 雲端硬碟的「應用程式資料夾」 =====
+        // 權限只要 drive.appdata：只能讀寫這個網站自己建立的隱藏檔案，看不到使用者其他雲端檔案。
+        // 登入憑證只放在記憶體（約 1 小時有效），不寫進瀏覽器儲存空間。
+        let GOOGLE_CLIENT_ID = '210732467974-k48f6v9dfepgp44c3jfrd8ug9gcjug63.apps.googleusercontent.com';   // ← 在 Google Cloud 建立的 OAuth 用戶端 ID（xxxx.apps.googleusercontent.com）
+        const CLOUD_FILE = 'kumquat_data.json';
+        const CLOUD_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+        // 會同步的資料；主題、字型、圖表模式等介面偏好留在各裝置自己
+        const CLOUD_KEYS = ['assets', 'matrixHistory', 'fxHistory', 'usdToTwdRate', 'annualSpend', 'goalTarget', 'targetAlloc', 'homeCurrency', 'priceProxy', 'reminderDay'];
+        let cloudToken = null, cloudTokenExp = 0, cloudBusy = false, cloudMsg = null;
+
+        function cloudSupported() { return location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname); }
+        function cloudConnected() { return !!cloudToken && Date.now() < cloudTokenExp - 60000; }
+        function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
+        function dataSummary(d) {
+            return { items: (d.assets || []).filter(a => !a.disabled).length, records: Object.keys(d.matrixHistory || {}).length };
+        }
+
+        function loadGsi() {
+            return new Promise((resolve, reject) => {
+                if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+                const old = document.getElementById('gsi-script');
+                const s = old || document.createElement('script');
+                s.addEventListener('load', () => resolve());
+                s.addEventListener('error', () => reject(new Error('無法載入 Google 登入元件，請確認網路連線。')));
+                if (!old) { s.id = 'gsi-script'; s.src = 'https://accounts.google.com/gsi/client'; s.async = true; document.head.appendChild(s); }
+            });
+        }
+
+        // 取得 Google 存取權；沒登入或過期時會跳出 Google 的登入／授權視窗
+        async function getCloudToken() {
+            if (cloudConnected()) return cloudToken;
+            await loadGsi();
+            return new Promise((resolve, reject) => {
+                const client = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_CLIENT_ID,
+                    scope: CLOUD_SCOPE,
+                    callback: r => {
+                        if (r.error) return reject(new Error(r.error_description || r.error));
+                        if (!google.accounts.oauth2.hasGrantedAllScopes(r, CLOUD_SCOPE)) return reject(new Error('沒有勾選「存取雲端硬碟中的應用程式資料」權限，無法同步。'));
+                        cloudToken = r.access_token;
+                        cloudTokenExp = Date.now() + (Number(r.expires_in) || 3600) * 1000;
+                        resolve(cloudToken);
+                    },
+                    error_callback: e => reject(new Error(e && e.type === 'popup_closed' ? '登入視窗被關閉了。'
+                        : e && e.type === 'popup_failed_to_open' ? '登入視窗被瀏覽器擋住了，請允許這個網站開啟彈出視窗。' : '登入失敗，請再試一次。'))
+                });
+                client.requestAccessToken();
+            });
+        }
+
+        async function driveFetch(url, opts) {
+            const token = await getCloudToken();
+            const o = opts || {};
+            const r = await fetch(url, { ...o, headers: { ...(o.headers || {}), Authorization: 'Bearer ' + token } });
+            if (r.status === 401) { cloudToken = null; throw new Error('Google 登入已過期，請再按一次。'); }
+            if (!r.ok) throw new Error(`Google 雲端回應錯誤（${r.status}），請稍後再試。`);
+            return r;
+        }
+        async function findCloudFile() {
+            const q = encodeURIComponent(`name='${CLOUD_FILE}'`);
+            const r = await driveFetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime%20desc`);
+            const j = await r.json();
+            return (j.files || [])[0] || null;
+        }
+        async function readCloudFile(file) {
+            const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`);
+            return r.json();
+        }
+        async function writeCloudFile(file, payload) {
+            const body = JSON.stringify(payload);
+            if (file) {
+                await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(file.id)}?uploadType=media`,
+                    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body });
+                return;
+            }
+            const b = 'kumquat' + Date.now();
+            const meta = JSON.stringify({ name: CLOUD_FILE, parents: ['appDataFolder'], mimeType: 'application/json' });
+            const multi = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${b}--`;
+            await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+                { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body: multi });
+        }
+
+        // 上傳：用這台裝置的資料覆蓋雲端；雲端若有「不是這台上次同步」的版本，先提醒
+        async function cloudUpload() {
+            if (!cloudReady()) return;
+            if (appState.isDemo) { setCloudMsg('目前是範例資料，不會上傳。請先清空範例，輸入或匯入你自己的資料。', 'warn'); return; }
+            const local = dataSummary(appState);
+            if (!local.items && !local.records) { setCloudMsg('這台裝置還沒有資料，不需要上傳。要從其他裝置拿資料，請按「從雲端載入」。', 'warn'); return; }
+            setCloudBusy(true, '上傳中…');
+            try {
+                const file = await findCloudFile();
+                if (file) {
+                    const remote = await readCloudFile(file).catch(() => null);
+                    if (remote && remote.savedAt && remote.savedAt !== appState.cloudLastSync) {
+                        const rs = remote.summary || dataSummary(remote.data || {});
+                        const ok = confirm(`雲端上有一份 ${fmtTime(remote.savedAt)} 存的資料（${rs.items} 個項目、${rs.records} 次紀錄），不是這台裝置上次同步的版本，可能是在別台裝置改過。\n\n上傳會用這台裝置的資料（${local.items} 個項目、${local.records} 次紀錄）覆蓋它。確定要上傳嗎？\n\n不確定的話請按「取消」，先用「從雲端載入」看看雲端的內容。`);
+                        if (!ok) { setCloudBusy(false); setCloudMsg('已取消上傳，雲端資料沒有變動。', 'warn'); return; }
+                    }
+                }
+                const data = {};
+                CLOUD_KEYS.forEach(k => { if (appState[k] !== undefined) data[k] = appState[k]; });
+                const payload = { app: 'kumquat', format: 1, savedAt: new Date().toISOString(), summary: local, data };
+                await writeCloudFile(file, payload);
+                appState.cloudLastSync = payload.savedAt;
+                saveToLocalStorage();
+                setCloudBusy(false);
+                setCloudMsg(`已上傳到你的 Google 雲端（${local.items} 個項目、${local.records} 次紀錄）。`, 'ok');
+            } catch (e) {
+                setCloudBusy(false);
+                setCloudMsg(e.message, 'err');
+            }
+        }
+
+        // 載入：用雲端的資料取代這台裝置的資料（會留復原點）
+        async function cloudDownload() {
+            if (!cloudReady()) return;
+            setCloudBusy(true, '讀取雲端中…');
+            try {
+                const file = await findCloudFile();
+                if (!file) { setCloudBusy(false); setCloudMsg('雲端還沒有資料。請先在有資料的裝置按「上傳到雲端」。', 'warn'); return; }
+                const remote = await readCloudFile(file);
+                if (!remote || remote.app !== 'kumquat' || !remote.data || !Array.isArray(remote.data.assets)) throw new Error('雲端檔案格式不正確，沒有載入。');
+                const rs = dataSummary(remote.data), local = dataSummary(appState);
+                setCloudBusy(false);
+                const hasLocal = !appState.isDemo && (local.items || local.records);
+                if (!confirm(`載入 ${fmtTime(remote.savedAt)} 存到雲端的資料？\n雲端：${rs.items} 個項目、${rs.records} 次紀錄\n` +
+                    (hasLocal ? `這台裝置目前：${local.items} 個項目、${local.records} 次紀錄（會被取代）\n\n載入後可以按右上角「復原雲端載入」回到現在的狀態。` : ''))) {
+                    setCloudMsg('已取消載入，這台裝置的資料沒有變動。', 'warn'); return;
+                }
+                if (hasLocal) setUndo('雲端載入');
+                CLOUD_KEYS.forEach(k => { if (remote.data[k] !== undefined) appState[k] = remote.data[k]; else delete appState[k]; });
+                appState.isDemo = false;
+                appState.cloudLastSync = remote.savedAt;
+                appState.baseCurrency = homeCur();
+                monthlyDirty = false;
+                byId('exchange-rate-input').value = appState.usdToTwdRate;
+                saveToLocalStorage();
+                applyCurrencyUI();
+                updateUI();
+                setCloudMsg(`已載入雲端資料（${rs.items} 個項目、${rs.records} 次紀錄）。`, 'ok');
+            } catch (e) {
+                setCloudBusy(false);
+                setCloudMsg(e.message, 'err');
+            }
+        }
+
+        function cloudDisconnect() {
+            try { if (cloudToken && window.google) google.accounts.oauth2.revoke(cloudToken, () => {}); } catch (e) {}
+            cloudToken = null; cloudTokenExp = 0;
+            setCloudMsg('已中斷與 Google 的連線。雲端上的資料仍然保留。', 'ok');
+        }
+
+        function cloudReady() {
+            if (cloudBusy) return false;
+            if (!GOOGLE_CLIENT_ID) { setCloudMsg('尚未設定 Google 用戶端 ID，這個功能還不能用。', 'warn'); return false; }
+            if (!cloudSupported()) { setCloudMsg('要用網址版（https）開啟才能連 Google；直接雙擊開啟的本機檔案不行。', 'warn'); return false; }
+            return true;
+        }
+        function setCloudBusy(on, text) { cloudBusy = on; if (on) cloudMsg = { text, type: 'busy' }; renderCloudPanel(); }
+        function setCloudMsg(text, type) { cloudMsg = { text, type }; renderCloudPanel(); }
+
+        function renderCloudPanel() {
+            const st = byId('cloud-status'), act = byId('cloud-actions');
+            if (!st || !act) return;
+            const lines = [];
+            if (!GOOGLE_CLIENT_ID) lines.push('<span class="text-amber-500 font-bold">尚未設定 Google 用戶端 ID，功能還不能用。</span>');
+            else if (!cloudSupported()) lines.push('<span class="text-amber-500 font-bold">請用網址版開啟，本機檔案無法連 Google。</span>');
+            else lines.push(cloudConnected() ? '<span class="text-emerald-500 font-bold">已連線 Google</span>（本次開啟有效）' : '尚未連線（按下方按鈕時會請你登入 Google）');
+            lines.push(`<span class="themed-text-secondary">這台裝置上次同步：${appState.cloudLastSync ? fmtTime(appState.cloudLastSync) : '從未同步'}</span>`);
+            if (cloudMsg) {
+                const cls = { ok: 'text-emerald-500', warn: 'text-amber-500', err: 'text-rose-500', busy: 'text-indigo-500' }[cloudMsg.type] || '';
+                lines.push(`<span class="${cls} font-bold">${escapeHtml(cloudMsg.text)}</span>`);
+            }
+            st.innerHTML = lines.join('<br>');
+            const dis = cloudBusy ? 'disabled' : '';
+            const btn = 'px-3 py-1.5 rounded-xl themed-btn-secondary text-xs flex items-center gap-1.5 transition disabled:opacity-50';
+            act.innerHTML = `<button type="button" ${dis} onclick="cloudUpload()" class="${btn}"><i class="fa-solid fa-cloud-arrow-up text-indigo-500"></i>上傳到雲端</button>
+                <button type="button" ${dis} onclick="cloudDownload()" class="${btn}"><i class="fa-solid fa-cloud-arrow-down text-emerald-500"></i>從雲端載入</button>` +
+                (cloudConnected() ? `<button type="button" ${dis} onclick="cloudDisconnect()" class="${btn}"><i class="fa-solid fa-link-slash text-rose-500"></i>中斷連線</button>` : '');
+        }
+
+        function toggleCloudPanel() {
+            const p = byId('cloud-panel');
+            const open = p.classList.toggle('hidden') === false;
+            if (open) {
+                renderCloudPanel();
+                if (GOOGLE_CLIENT_ID && cloudSupported()) loadGsi().catch(() => {});   // 先載入登入元件，按按鈕時才不會被擋彈出視窗
+            }
+        }
+        document.addEventListener('click', e => {
+            const p = byId('cloud-panel');
+            if (p && !p.classList.contains('hidden') && !e.target.closest('#cloud-wrap')) p.classList.add('hidden');
+        });
+
         function saveToLocalStorage() {
             try { localStorage.setItem('wealth_matrix_v5', JSON.stringify(appState)); } catch (e) {}
         }
