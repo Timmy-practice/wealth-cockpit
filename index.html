@@ -506,8 +506,9 @@
                     <input type="text" id="im-name" required class="w-full themed-input rounded-xl px-3 py-2 text-xs" placeholder="例如：美股ETF、台新">
                 </div>
                 <div>
-                    <label class="block text-xs themed-text-secondary mb-1">代號（選填，自動抓價用）</label>
-                    <input type="text" id="im-ticker" class="w-full themed-input rounded-xl px-3 py-2 text-xs" placeholder="VTI、VWRA.L、0050.TW">
+                    <label class="block text-xs themed-text-secondary mb-1">股票代碼（選填，自動抓價用）</label>
+                    <input type="text" id="im-ticker" class="w-full themed-input rounded-xl px-3 py-2 text-xs" placeholder="例如 2330、0050、VTI、VWRA">
+                    <p id="im-ticker-hint" class="hidden text-xs text-indigo-500 mt-1"></p>
                 </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -1242,6 +1243,28 @@
         function fmtNum(x, dec) { return Number(x).toLocaleString(undefined, { maximumFractionDigits: dec == null ? 0 : dec }); }
         function monthOf(d) { return d.slice(0, 7); }
         function isStockWithShares(a) { return a.category === 'Stock' && a.shares > 0; }
+
+        // ----- 股票代碼：放寬寫法，由程式整理 -----
+        // 全形轉半形、去掉中文與空白、轉大寫。例如「台積電２３３０」→「2330」、「vti」→「VTI」
+        function normTicker(s) {
+            return String(s || '')
+                .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+                .replace(/[^\x21-\x7E]/g, '')
+                .toUpperCase();
+        }
+        // 從名稱找台股代碼，例如「台積電2330」→「2330」、「元大台灣50 0050」→「0050」
+        function tickerFromName(name) {
+            const s = String(name || '').replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+            const m = s.match(/(?<![0-9A-Za-z])(\d{4,6}[A-Za-z]?)(?![0-9A-Za-z])/);   // 4～6 位數字，可帶一個字母（例如 00679B）
+            return m ? m[1].toUpperCase() : '';
+        }
+        // 抓價時要試的代號：已有後綴就照用；數字開頭（台股）試上市 .TW、上櫃 .TWO；英文先當美股，查不到再試倫敦 .L
+        function tickerCandidates(t) {
+            if (!t) return [];
+            if (t.includes('.')) return [t];
+            if (/^\d/.test(t)) return [t + '.TW', t + '.TWO'];
+            return [t, t + '.L'];
+        }
         function displayName(a) { return a.ticker && a.ticker !== a.name ? `${a.name}（${a.ticker}）` : a.name; }
         function hasHistory(id) { return Object.values(appState.matrixHistory || {}).some(h => h[id] !== undefined); }
         function sameKey(x, y) { return String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase(); }
@@ -1315,7 +1338,8 @@
                 rowsHtml.push(`<tr class="m-row border-b border-slate-700/40 ${a.disabled ? 'opacity-60' : ''}" data-id="${a.id}" data-prefill="${pre}" data-exact="${exact}"
                         data-orig="${sv === undefined ? '' : sv}" data-shares="${stock ? a.shares : ''}" data-cur="${a.currency}"
                         data-unit="${unit}" data-incur="${inCur}" data-cost="${stock && a.costPerShare > 0 ? a.costPerShare : ''}"
-                        data-ticker="${a.category === 'Stock' && a.ticker ? escapeHtml(a.ticker.toUpperCase()) : ''}">
+                        data-ticker="${a.category === 'Stock' ? escapeHtml(normTicker(a.ticker) || tickerFromName(a.name)) : ''}"
+                        data-badticker="${a.category === 'Stock' && a.ticker && !normTicker(a.ticker) ? '1' : ''}">
                     <td class="py-2 cursor-pointer select-none" title="雙擊可編輯"><span class="font-bold">${escapeHtml(displayName(a))}</span>
                         <span class="themed-text-secondary">（${sub}）</span>${hint}</td>
                     <td class="hidden sm:table-cell text-right py-2 themed-text-secondary">${prevTxt}</td>
@@ -1519,6 +1543,7 @@
             byId('im-id').value = a ? a.id : '';
             byId('im-name').value = a ? a.name : '';
             byId('im-ticker').value = a && a.ticker ? a.ticker : '';
+            byId('im-ticker-hint').classList.add('hidden');
             byId('im-category').value = a ? a.category : 'Cash';
             byId('im-currency').value = a ? a.currency : 'TWD';
             byId('im-shares').value = a && a.shares !== undefined ? a.shares : '';
@@ -1537,7 +1562,9 @@
             const id = byId('im-id').value;
             const name = byId('im-name').value.trim();
             if (!name) { alert('請填寫名稱。'); return; }
-            const ticker = byId('im-ticker').value.trim();
+            // 代碼放寬：存整理後的寫法（「台積電2330」→「2330」）；整理後是空的（例如只打「台積電」）就照原樣存，抓價時會提醒
+            const tickerRaw = byId('im-ticker').value.trim();
+            const ticker = normTicker(tickerRaw) || tickerRaw;
             const category = byId('im-category').value;
             const currency = byId('im-currency').value;
             const note = byId('im-note').value.trim();
@@ -1729,6 +1756,19 @@
             if (btn.dataset.act === 'enable') enableItem(btn.dataset.id);
         });
         byId('item-modal').addEventListener('click', e => { if (e.target.id === 'item-modal') closeItemModal(); });
+        // 股票代碼空白時，從名稱帶入（例如名稱「台積電2330」→ 代碼 2330），並提示確認
+        function suggestTickerFromName() {
+            if (byId('im-category').value !== 'Stock' || byId('im-ticker').value.trim()) return;
+            const t = tickerFromName(byId('im-name').value);
+            if (!t) return;
+            byId('im-ticker').value = t;
+            const h = byId('im-ticker-hint');
+            h.textContent = `已從名稱帶入代碼 ${t}，請確認是否正確。`;
+            h.classList.remove('hidden');
+        }
+        byId('im-name').addEventListener('blur', suggestTickerFromName);
+        byId('im-category').addEventListener('change', suggestTickerFromName);
+        byId('im-ticker').addEventListener('input', () => byId('im-ticker-hint').classList.add('hidden'));
         document.addEventListener('keydown', e => { if (e.key === 'Escape') closeItemModal(); });
 
         // ===== v10 網路報價：匯率直接抓 open.er-api.com；股價經使用者自己的轉送點（只送代號） =====
@@ -1787,8 +1827,12 @@
                 failed.push('匯率（連線失敗）');
             }
 
-            // 2) 股價：只處理有代號的股票列
-            const stockRows = [...document.querySelectorAll('#monthly-body tr.m-row')].filter(tr => tr.dataset.ticker);
+            // 2) 股價：只處理有代碼的股票列
+            const allRows = [...document.querySelectorAll('#monthly-body tr.m-row')];
+            const assetName = tr => { const a = appState.assets.find(x => x.id === tr.dataset.id); return a ? a.name : tr.dataset.id; };
+            allRows.filter(tr => tr.dataset.badticker === '1' && !tr.dataset.ticker)
+                .forEach(tr => failed.push(`${assetName(tr)}：請在代碼欄填股票代碼（例如 2330），中文名稱查不到`));
+            const stockRows = allRows.filter(tr => tr.dataset.ticker);
             const noShares = stockRows.filter(tr => tr.dataset.shares === '');
             noShares.forEach(tr => failed.push(`${tr.dataset.ticker}（未填股數，無法用網路價格算總金額）`));
             const rows = stockRows.filter(tr => tr.dataset.shares !== '');
@@ -1796,18 +1840,31 @@
                 failed.push(`${rows.length} 檔股價（尚未設定轉送點）`);
             } else if (rows.length) {
                 try {
-                    const symbols = [...new Set(rows.map(tr => tr.dataset.ticker))];
-                    const res = await (await fetch(`${appState.priceProxy}?symbols=${encodeURIComponent(symbols.join(','))}`)).json();
+                    // 每個代碼可能要試好幾種寫法（2330 → 2330.TW、2330.TWO），一次最多送 30 個
+                    const symbols = [...new Set(rows.flatMap(tr => tickerCandidates(tr.dataset.ticker)))];
+                    const res = {};
+                    for (let i = 0; i < symbols.length; i += 30) {
+                        const part = symbols.slice(i, i + 30);
+                        Object.assign(res, await (await fetch(`${appState.priceProxy}?symbols=${encodeURIComponent(part.join(','))}`)).json());
+                    }
+                    let resolvedAny = false;
                     rows.forEach(tr => {
-                        const t = tr.dataset.ticker, q = res && res[t];
-                        if (!q || q.error || !(q.price > 0)) { failed.push(`${t}（查無報價）`); return; }
-                        if (q.currency !== tr.dataset.cur) { failed.push(`${t}（報價幣別 ${q.currency}，項目是 ${tr.dataset.cur}）`); return; }
-                        // v12：用 股數 × 網路價格 算出總金額填入
-                        const total = Math.round(parseFloat(tr.dataset.shares) * q.price * 100) / 100;
+                        const t = tr.dataset.ticker;
+                        const found = tickerCandidates(t).map(c => ({ c, q: res[c] })).filter(x => x.q && !x.q.error && x.q.price > 0);
+                        if (!found.length) { failed.push(`${t}（查無報價）`); return; }
+                        // 優先選報價幣別和項目一致的那個（避免抓到別的市場的同名標的）
+                        const hit = found.find(x => x.q.currency === tr.dataset.cur);
+                        if (!hit) { failed.push(`${t}（報價幣別 ${found[0].q.currency}，項目是 ${tr.dataset.cur}）`); return; }
+                        // 找到正確寫法就存回項目，下次直接用（例如 2330 → 2330.TW）
+                        const a = appState.assets.find(x => x.id === tr.dataset.id);
+                        if (a && a.ticker !== hit.c) { a.ticker = hit.c; tr.dataset.ticker = hit.c; resolvedAny = true; }
+                        // 用 股數 × 網路價格 算出總金額填入
+                        const total = Math.round(parseFloat(tr.dataset.shares) * hit.q.price * 100) / 100;
                         // 這一列改用主幣輸入時，換成主幣再填
                         setRowValue(tr, tr.dataset.unit === 'home' ? roundCur(convertCur(total, tr.dataset.cur, tr.dataset.incur, currentFx()), tr.dataset.incur) : total, '網路價格');
-                        done.push(`${t} ${round4(q.price)} × ${fmtNum(parseFloat(tr.dataset.shares), 4)} 股`);
+                        done.push(`${hit.c} ${round4(hit.q.price)} × ${fmtNum(parseFloat(tr.dataset.shares), 4)} 股`);
                     });
+                    if (resolvedAny) saveToLocalStorage();
                 } catch (e) {
                     failed.push('股價（轉送點連線失敗）');
                 }
