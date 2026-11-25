@@ -1,0 +1,8 @@
+﻿# 只放網頁本身。資產資料、金鑰絕對不要放進來
+*.xlsx
+*.xls
+*.csv
+*.jks
+*.keystore
+*.apk
+.env
