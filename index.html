@@ -304,10 +304,10 @@
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
                     <div class="flex items-center justify-between mb-2">
-                        <h2 class="font-bold text-sm flex items-center gap-2"><i class="fa-solid fa-flag-checkered text-indigo-500"></i> 財富自由目標</h2>
-                        <button type="button" onclick="setGoalTarget()" class="text-xs themed-text-secondary hover:text-indigo-500"><i class="fa-solid fa-pen"></i> 設定目標</button>
+                        <h2 class="font-bold text-sm flex items-center gap-2"><i class="fa-solid fa-flag-checkered text-indigo-500"></i> 我的目標</h2>
+                        <button type="button" onclick="openGoalModal()" class="text-xs themed-text-secondary hover:text-indigo-500"><i class="fa-solid fa-plus"></i> 新增目標</button>
                     </div>
-                    <div id="goal-body" class="text-xs space-y-2"></div>
+                    <div id="goal-body" class="text-xs space-y-3"></div>
                 </div>
                 <div>
                     <div class="flex items-center justify-between mb-2">
@@ -330,6 +330,7 @@
                         <button type="button" onclick="clearAllData()" class="underline font-bold">清除範例，開始記錄我的資料</button></div>
                     <div id="backup-reminder" class="hidden text-xs mt-1 text-amber-500"></div>
                     <button type="button" onclick="downloadReminderIcs()" class="text-xs mt-1 themed-text-secondary hover:text-indigo-500"><i class="fa-regular fa-calendar"></i> 加到行事曆：每月提醒我更新</button>
+                    <div id="stats-toggle" class="text-xs mt-1 themed-text-secondary"></div>
                 </div>
                 <div class="flex items-center gap-2 text-xs">
                     <span class="themed-text-secondary">更新月份</span>
@@ -495,6 +496,45 @@
         </div>
 
     </main>
+    <!-- 目標編輯視窗（新增／編輯） -->
+    <div id="goal-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4" style="background: rgba(15, 23, 42, 0.55);">
+        <form onsubmit="saveGoalModal(event)" class="w-full max-w-md rounded-2xl p-5 space-y-3 shadow-xl" style="background: var(--bg-color); border: 1px solid var(--card-border); color: var(--text-primary);">
+            <h3 id="gm-title" class="font-bold text-sm">新增目標</h3>
+            <input type="hidden" id="gm-id">
+            <div>
+                <label class="block text-xs themed-text-secondary mb-1">目標名稱</label>
+                <input type="text" id="gm-name" required maxlength="30" class="w-full themed-input rounded-xl px-3 py-2 text-xs" placeholder="例如：緊急預備金、買房頭期款、小孩教育金">
+            </div>
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" id="gm-auto" onchange="toggleGoalAuto()">
+                金額用「年支出 × 25」自動計算（財富自由的 4% 法則）
+            </label>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs themed-text-secondary mb-1">目標金額（NT$）</label>
+                    <input type="number" step="any" min="0" id="gm-amount" class="w-full themed-input rounded-xl px-3 py-2 text-xs" placeholder="例如：3000000">
+                    <p id="gm-amount-hint" class="text-xs themed-text-secondary mt-1"></p>
+                </div>
+                <div>
+                    <label class="block text-xs themed-text-secondary mb-1">希望達成的年月（選填）</label>
+                    <input type="month" id="gm-date" class="w-full themed-input rounded-xl px-3 py-2 text-xs">
+                </div>
+            </div>
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" id="gm-primary">
+                設為主要目標（小金庫的樹跟著它長大）
+            </label>
+            <p class="text-xs themed-text-secondary leading-relaxed">淨值會依清單順序，先填滿排在前面的目標，再填下一個；同一筆錢不會重複計算。可以在清單上用 ↑↓ 調整順序。</p>
+            <div class="flex items-center justify-between gap-2 pt-2">
+                <button type="button" id="gm-delete" onclick="deleteGoalFromModal()" class="hidden px-3 py-2 rounded-xl themed-btn-secondary text-xs text-rose-500">刪除目標</button>
+                <div class="flex gap-2 ml-auto">
+                    <button type="button" onclick="closeGoalModal()" class="px-4 py-2 rounded-xl themed-btn-secondary text-xs">取消</button>
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">儲存</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
     <!-- 項目編輯視窗（新增／編輯） -->
     <div id="item-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4" style="background: rgba(15, 23, 42, 0.55);">
         <form id="item-form" onsubmit="saveItemModal(event)" class="w-full max-w-md rounded-2xl p-5 space-y-3 shadow-xl" style="background: var(--bg-color); border: 1px solid var(--card-border); color: var(--text-primary);">
@@ -1387,6 +1427,7 @@
             updateMonthlyStatus();
             updateFetchHint();
             updateBanners();
+            renderStatsToggle();
         }
 
         // 月更新表目前填的匯率（還沒存檔也算）
@@ -1668,6 +1709,7 @@
                 byId('exchange-rate-input').value = rate;
             }
             saveToLocalStorage();
+            sendStatsPing();   // 匿名回報「這個月有更新」（只送隨機編號）
 
             const nowNT = netWorthTwdOn(key);
             // 變動最大：也包含新增（上月沒有）與本月未記錄（例如停用）的項目，讓大幅變動有解釋
@@ -1769,7 +1811,8 @@
         byId('im-name').addEventListener('blur', suggestTickerFromName);
         byId('im-category').addEventListener('change', suggestTickerFromName);
         byId('im-ticker').addEventListener('input', () => byId('im-ticker-hint').classList.add('hidden'));
-        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeItemModal(); });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeItemModal(); closeGoalModal(); } });
+        byId('goal-modal').addEventListener('click', e => { if (e.target.id === 'goal-modal') closeGoalModal(); });
 
         // ===== v10 網路報價：匯率直接抓 open.er-api.com；股價經轉送點（只送代號，不送金額） =====
         const FX_API = 'https://open.er-api.com/v6/latest/USD';
@@ -2029,9 +2072,44 @@
         function currentNetWorthTwd() {
             return appState.assets.reduce((s, a) => a.disabled ? s : s + signOf(a) * toTwd(a.amount, a.currency, appState.usdToTwdRate), 0);
         }
-        function goalTarget() {
-            return appState.goalTarget > 0 ? appState.goalTarget : (appState.annualSpend || 550000) * 25;
+        // ----- v12 多個目標：依清單順序填滿（同一筆錢不重複計算），主要目標決定小金庫樹的成長 -----
+        // appState.goals = [{ id, name, auto(用年支出×25), amount(NT$), date('YYYY-MM' 選填), primary }]
+        // appState.goalsDone = [{ name, amount, doneAt }]
+        function ensureGoals() {
+            if (Array.isArray(appState.goals)) return;
+            // 舊版只有一個「財富自由」目標：自動轉成目標清單的第一個
+            const custom = appState.goalTarget > 0;
+            appState.goals = [{ id: 'g_freedom', name: '財富自由', auto: !custom, amount: custom ? appState.goalTarget : undefined, primary: true }];
         }
+        function goalAmount(g) { return g.auto ? (appState.annualSpend || 550000) * 25 : (Number(g.amount) || 0); }
+        function primaryGoal() { ensureGoals(); return appState.goals.find(g => g.primary) || appState.goals[0] || null; }
+
+        // 依順序填滿：淨值先給第 1 個目標，填滿了剩下的再給第 2 個……
+        function allocateGoals(now) {
+            ensureGoals();
+            let left = Math.max(0, now), before = 0;
+            return appState.goals.map(g => {
+                const target = goalAmount(g);
+                const filled = Math.min(left, target);
+                left -= filled;
+                const remaining = Math.max(0, target - filled);
+                before += remaining;   // 到這個目標為止（含前面的目標）總共還差多少
+                return { g, target, filled, remaining, cumRemaining: before, pct: target > 0 ? filled / target * 100 : 100 };
+            });
+        }
+        function primaryProgress() {
+            const p = primaryGoal();
+            if (!p) return null;
+            return allocateGoals(currentNetWorthTwd()).find(x => x.g.id === p.id) || null;
+        }
+        // 距離目標年月還有幾個月（含目標當月）；沒填日期回傳 null
+        function monthsUntil(ym) {
+            if (!ym) return null;
+            const [y, m] = ym.split('-').map(Number);
+            const d = new Date();
+            return (y * 12 + m) - (d.getFullYear() * 12 + d.getMonth() + 1) + 1;
+        }
+        function ymText(ym) { const [y, m] = ym.split('-'); return `${y} 年 ${Number(m)} 月`; }
         function fmtTwd(v) { return fmtMoney(v); }   // 依顯示幣別（目前匯率）
         function fmtWan(v) { return (toBase(v) / 10000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + wanUnit(); }
         function fmtWanTwd(v) { return (v / 10000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' 萬'; }   // 輸入提示用，固定台幣
@@ -2057,50 +2135,153 @@
             return `約 ${d.getFullYear()} 年 ${d.getMonth() + 1} 月（${[y ? `${y} 年` : '', mo ? `${mo} 個月` : ''].filter(Boolean).join(' ')}後）`;
         }
 
+        let showDoneGoals = false;
+
         function renderGoalCard() {
             const body = byId('goal-body');
             if (!body) return;
+            ensureGoals();
             const now = currentNetWorthTwd();
-            const target = goalTarget();
-            const auto = !(appState.goalTarget > 0);
-            const pct = target > 0 ? Math.max(0, Math.min(100, now / target * 100)) : 0;
-            let html = `<div class="flex items-baseline justify-between gap-2">
-                    <span class="money text-lg font-black">${fmtTwd(now)}</span>
-                    <span class="themed-text-secondary">目標 <span class="money">${fmtWan(target)}</span>（${auto ? '年支出 × 25，4% 法則' : '自訂'}）</span>
-                </div>
-                <div class="w-full h-3 rounded-full themed-pill overflow-hidden"><div class="h-full bg-indigo-500 rounded-full" style="width:${pct.toFixed(1)}%"></div></div>
-                <div class="flex justify-between"><span class="font-bold text-indigo-500">已完成 ${pct.toFixed(1)}%</span>
-                    <span class="themed-text-secondary">還差 <span class="money">${fmtWan(Math.max(0, target - now))}</span></span></div>`;
+            const rows = allocateGoals(now);
             const tr = monthlyTrend();
-            if (now >= target) {
-                html += `<div class="font-bold text-emerald-500">已達成目標。可以考慮把目標往上調，或開始規劃提領。</div>`;
-            } else if (!tr) {
-                html += `<div class="themed-text-secondary">累積兩個月以上的紀錄後，會依你的實際成長速度估算達成時間。</div>`;
-            } else if (tr.perMonth <= 0) {
-                html += `<div class="text-amber-500">過去 ${tr.months} 個月淨值平均每月 <span class="money">${fmtTwd(tr.perMonth)}</span>，照這個趨勢無法達成目標。</div>`;
-            } else {
-                const remaining = target - now;
-                const base = Math.ceil(remaining / tr.perMonth);
-                const faster = Math.ceil(remaining / (tr.perMonth + 10000));
-                html += `<div>過去 ${tr.months} 個月平均每月 <span class="money font-bold ${pnlColorClass(1)}">+${fmtTwd(tr.perMonth)}</span>，照這個速度：</div>
-                    <div class="text-sm font-bold">${etaText(remaining, tr.perMonth)}</div>
-                    <div class="themed-text-secondary">如果每月多存 NT$ 1 萬，可以提早約 ${Math.max(0, base - faster)} 個月。</div>`;
+            const n = rows.length;
+            let html = `<div class="flex items-baseline justify-between gap-2">
+                    <span class="themed-text-secondary">目前淨值</span>
+                    <span class="money text-lg font-black">${fmtTwd(now)}</span>
+                </div>`;
+            if (!n) html += `<div class="themed-text-secondary">還沒有目標。按右上角「新增目標」，例如緊急預備金、買房頭期款、財富自由。</div>`;
+            rows.forEach((r, i) => {
+                const g = r.g, done = r.remaining <= 0 && r.target > 0;
+                const pct = Math.max(0, Math.min(100, r.pct));
+                let detail = '';
+                if (done) {
+                    detail = `<span class="font-bold text-emerald-500">已存到！</span> 像買房、買車這種會把錢花掉的目標，花掉後按「已達成」移出清單；緊急預備金這種要一直留著的，不用按。`;
+                } else {
+                    const parts = [];
+                    const ml = monthsUntil(g.date);
+                    if (ml !== null) {
+                        // 前面的目標會先吃掉存下來的錢，所以要把它們一起算進去
+                        parts.push(ml > 0
+                            ? `想在 ${ymText(g.date)} 前達成：每月需存約 <span class="money font-bold">${fmtTwd(r.cumRemaining / ml)}</span>${i > 0 && r.cumRemaining > r.remaining ? '（含排在前面的目標）' : ''}`
+                            : `<span class="text-amber-500">已超過目標年月 ${ymText(g.date)}，可以調整日期或金額。</span>`);
+                    }
+                    if (tr && tr.perMonth > 0) parts.push(`照目前速度：${etaText(r.cumRemaining, tr.perMonth)}`);
+                    detail = parts.join('<br>');
+                }
+                html += `<div class="themed-pill rounded-xl p-3 space-y-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="font-bold text-sm">${i + 1}. ${escapeHtml(g.name)}${g.primary ? ' <span title="主要目標：小金庫的樹跟著它長大" style="color: var(--accent)">★</span>' : ''}</span>
+                        <span class="flex items-center gap-1 shrink-0">
+                            <button type="button" ${i === 0 ? 'disabled' : ''} onclick="moveGoal('${g.id}', -1)" title="往前移" class="px-1.5 rounded themed-btn-secondary disabled:opacity-30">↑</button>
+                            <button type="button" ${i === n - 1 ? 'disabled' : ''} onclick="moveGoal('${g.id}', 1)" title="往後移" class="px-1.5 rounded themed-btn-secondary disabled:opacity-30">↓</button>
+                            <button type="button" onclick="openGoalModal('${g.id}')" title="編輯" class="px-1.5 rounded themed-btn-secondary"><i class="fa-solid fa-pen"></i></button>
+                        </span>
+                    </div>
+                    <div class="flex justify-between themed-text-secondary">
+                        <span>目標 <span class="money">${fmtWan(r.target)}</span>${g.auto ? '（年支出 × 25）' : ''}${g.date ? `・${ymText(g.date)}` : ''}</span>
+                        <span>${done ? '' : `還差 <span class="money">${fmtWan(r.remaining)}</span>`}</span>
+                    </div>
+                    <div class="w-full h-2.5 rounded-full overflow-hidden" style="background: var(--card-border)"><div class="h-full rounded-full ${done ? 'bg-emerald-500' : 'bg-indigo-500'}" style="width:${pct.toFixed(1)}%"></div></div>
+                    <div class="flex justify-between items-start gap-2">
+                        <span class="font-bold ${done ? 'text-emerald-500' : 'text-indigo-500'} shrink-0">${pct.toFixed(1)}%</span>
+                        ${done ? `<button type="button" onclick="completeGoal('${g.id}')" class="px-2 py-0.5 rounded-lg bg-emerald-500 text-white font-bold">已達成</button>` : ''}
+                    </div>
+                    ${detail ? `<div class="leading-relaxed">${detail}</div>` : ''}
+                </div>`;
+            });
+            if (n && !tr) html += `<div class="themed-text-secondary">累積兩個月以上的紀錄後，會依你的實際成長速度估算達成時間。</div>`;
+            else if (n && tr && tr.perMonth <= 0) html += `<div class="text-amber-500">過去 ${tr.months} 個月淨值平均每月 <span class="money">${fmtTwd(tr.perMonth)}</span>，照這個趨勢目標不會前進。</div>`;
+            else if (n && tr) html += `<div class="themed-text-secondary">過去 ${tr.months} 個月平均每月 <span class="money ${pnlColorClass(1)}">+${fmtTwd(tr.perMonth)}</span>。</div>`;
+            const doneList = appState.goalsDone || [];
+            if (doneList.length) {
+                html += `<div><button type="button" onclick="showDoneGoals = !showDoneGoals; renderGoalCard()" class="themed-text-secondary hover:text-indigo-500">🏅 已達成的目標（${doneList.length}）${showDoneGoals ? '▴' : '▾'}</button>`;
+                if (showDoneGoals) html += `<div class="mt-1 space-y-1">${doneList.map(d => `<div class="themed-text-secondary">✅ ${escapeHtml(d.name)}　<span class="money">${fmtWan(d.amount)}</span>　${d.doneAt}</div>`).join('')}</div>`;
+                html += `</div>`;
             }
-            html += `<div class="themed-text-secondary">估算只依過去的變化，不代表未來報酬，也不是投資建議。</div>`;
+            html += `<div class="themed-text-secondary">淨值依清單順序先填滿前面的目標。估算只依過去的變化，不代表未來報酬，也不是投資建議。</div>`;
             body.innerHTML = html;
             renderAllocCard();
         }
 
-        function setGoalTarget() {
-            const cur = appState.goalTarget > 0 ? String(appState.goalTarget) : '';
-            const v = prompt(`財富自由目標淨值（NT$）\n留空＝自動用「年支出 × 25」（目前約 NT$ ${fmtWanTwd((appState.annualSpend || 550000) * 25)}）`, cur);
-            if (v === null) return;
-            const n = parseFloat(v.replace(/[,\s]/g, ''));
-            if (v.trim() === '') delete appState.goalTarget;
-            else if (n > 0) appState.goalTarget = n;
-            else { alert('請輸入大於 0 的數字，或留空。'); return; }
+        // 主要目標被移除時，改由「還沒存滿的第一個目標」接手（避免樹直接變成開花大樹）
+        function pickPrimaryFallback() {
+            if (!appState.goals.length || appState.goals.some(g => g.primary)) return;
+            const next = allocateGoals(currentNetWorthTwd()).find(r => r.remaining > 0);
+            (next ? next.g : appState.goals[0]).primary = true;
+        }
+
+        function afterGoalChange() {
             saveToLocalStorage();
             renderGoalCard();
+            renderBearHero();
+        }
+
+        function moveGoal(id, dir) {
+            const list = appState.goals, i = list.findIndex(g => g.id === id), j = i + dir;
+            if (i < 0 || j < 0 || j >= list.length) return;
+            [list[i], list[j]] = [list[j], list[i]];
+            afterGoalChange();
+        }
+
+        function completeGoal(id) {
+            const g = appState.goals.find(x => x.id === id);
+            if (!g) return;
+            if (!confirm(`「${g.name}」標記為已達成？\n它會移出目標清單（不再分走你的淨值），保留在「已達成的目標」裡。`)) return;
+            appState.goalsDone = appState.goalsDone || [];
+            appState.goalsDone.unshift({ name: g.name, amount: goalAmount(g), doneAt: localDateString() });
+            appState.goals = appState.goals.filter(x => x.id !== id);
+            pickPrimaryFallback();
+            afterGoalChange();
+        }
+
+        // ----- 目標編輯視窗 -----
+        function toggleGoalAuto() {
+            const auto = byId('gm-auto').checked;
+            byId('gm-amount').disabled = auto;
+            byId('gm-amount-hint').textContent = auto ? `目前約 NT$ ${fmtWanTwd((appState.annualSpend || 550000) * 25)}，會跟著年支出自動調整` : '';
+        }
+        function openGoalModal(id) {
+            ensureGoals();
+            const g = id ? appState.goals.find(x => x.id === id) : null;
+            byId('gm-title').textContent = g ? '編輯目標' : '新增目標';
+            byId('gm-id').value = g ? g.id : '';
+            byId('gm-name').value = g ? g.name : '';
+            byId('gm-auto').checked = !!(g && g.auto);
+            byId('gm-amount').value = g && !g.auto && g.amount ? g.amount : '';
+            byId('gm-date').value = g && g.date ? g.date : '';
+            byId('gm-primary').checked = g ? !!g.primary : !appState.goals.length;
+            byId('gm-delete').classList.toggle('hidden', !g);
+            toggleGoalAuto();
+            byId('goal-modal').classList.remove('hidden');
+            byId('gm-name').focus();
+        }
+        function closeGoalModal() { byId('goal-modal').classList.add('hidden'); }
+        function saveGoalModal(e) {
+            if (e) e.preventDefault();
+            const name = byId('gm-name').value.trim();
+            if (!name) { alert('請填寫目標名稱。'); return; }
+            const auto = byId('gm-auto').checked;
+            const amount = parseFloat(byId('gm-amount').value);
+            if (!auto && !(amount > 0)) { alert('請填寫大於 0 的目標金額，或勾選「用年支出 × 25 自動計算」。'); return; }
+            const date = byId('gm-date').value || undefined;
+            const primary = byId('gm-primary').checked;
+            const id = byId('gm-id').value;
+            let g = id ? appState.goals.find(x => x.id === id) : null;
+            if (!g) { g = { id: 'g_' + Date.now().toString(36) }; appState.goals.push(g); }
+            Object.assign(g, { name, auto, amount: auto ? undefined : amount, date, primary });
+            if (primary) appState.goals.forEach(x => { if (x !== g) x.primary = false; });
+            pickPrimaryFallback();   // 一定要有一個主要目標
+            closeGoalModal();
+            afterGoalChange();
+        }
+        function deleteGoalFromModal() {
+            const id = byId('gm-id').value;
+            const g = appState.goals.find(x => x.id === id);
+            if (!g || !confirm(`刪除目標「${g.name}」？`)) return;
+            appState.goals = appState.goals.filter(x => x.id !== id);
+            pickPrimaryFallback();
+            closeGoalModal();
+            afterGoalChange();
         }
 
         // ----- 配置健檢：目前占比 vs 使用者自訂的目標占比（只算資產，不含負債） -----
@@ -2470,7 +2651,7 @@
 
         const STAGE_NAMES = ['一顆種子', '冒出新芽', '長出小苗', '變成小樹', '結出金幣', '開花的大樹'];
         const STAGE_NEXT = ['', '冒出新芽', '長出小苗', '變成小樹', '結出金幣', '開滿花，變成大樹'];
-        const STAGE_AT = [0, 5, 20, 40, 70, 100];   // 依財富自由目標完成度（%）決定成長階段
+        const STAGE_AT = [0, 5, 20, 40, 70, 100];   // 依「主要目標」完成度（%）決定成長階段
 
         function growthStage(pct) {
             let s = 0;
@@ -2484,8 +2665,11 @@
             const hb = byId('header-bears');
             if (hb && !hb.innerHTML.trim()) hb.innerHTML = headerBearsSvg();
 
-            const now = currentNetWorthTwd(), target = goalTarget();
-            const pct = target > 0 ? Math.max(0, now / target * 100) : 0;
+            // v12：樹跟著「主要目標」長大；依清單順序填滿後，主要目標分到的金額 ÷ 目標金額
+            const pg = primaryProgress();
+            const target = pg ? pg.target : 0, filled = pg ? pg.filled : 0;
+            const goalName = pg ? pg.g.name : '';
+            const pct = target > 0 ? Math.max(0, filled / target * 100) : 0;
             const stage = growthStage(pct);
             const dates = sortedDates();
             const updated = dates.some(d => monthOf(d) === localDateString().slice(0, 7));
@@ -2506,11 +2690,14 @@
             else msg = '這個月的水澆好了！下個月記得再來找我們～';
             byId('bear-bubble').textContent = msg;
 
-            byId('bear-stage').innerHTML = `小金庫成長階段：<span class="font-bold" style="color: var(--accent)">${STAGE_NAMES[stage]}</span>（財富自由目標完成 ${Math.min(pct, 100).toFixed(1)}%）`;
+            byId('bear-stage').innerHTML = pg
+                ? `小金庫成長階段：<span class="font-bold" style="color: var(--accent)">${STAGE_NAMES[stage]}</span>（主要目標「${escapeHtml(goalName)}」完成 ${Math.min(pct, 100).toFixed(1)}%）`
+                : `小金庫成長階段：<span class="font-bold" style="color: var(--accent)">${STAGE_NAMES[stage]}</span>（還沒有目標，到「我的目標」新增一個吧）`;
             const nextAt = STAGE_AT[stage + 1];
-            byId('bear-next').innerHTML = nextAt === undefined
-                ? '小樹已經開滿花，你達成財富自由目標了！'
-                : `再累積 <span class="money font-bold">${fmtMoney(Math.max(0, target * nextAt / 100 - now))}</span>，小樹就會${STAGE_NEXT[stage + 1]}。`;
+            byId('bear-next').innerHTML = !pg ? ''
+                : nextAt === undefined
+                ? `小樹已經開滿花，你達成「${escapeHtml(goalName)}」了！`
+                : `再累積 <span class="money font-bold">${fmtMoney(Math.max(0, target * nextAt / 100 - filled))}</span>，小樹就會${STAGE_NEXT[stage + 1]}。`;
             byId('bear-cta').classList.toggle('hidden', !(appState.assets.length && !updated && !appState.isDemo));
         }
 
@@ -2750,7 +2937,7 @@
         const CLOUD_FILE = 'kumquat_data.json';
         const CLOUD_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
         // 會同步的資料；主題、字型、圖表模式等介面偏好留在各裝置自己
-        const CLOUD_KEYS = ['assets', 'matrixHistory', 'fxHistory', 'usdToTwdRate', 'annualSpend', 'goalTarget', 'targetAlloc', 'homeCurrency', 'priceProxy', 'reminderDay'];
+        const CLOUD_KEYS = ['assets', 'matrixHistory', 'fxHistory', 'usdToTwdRate', 'annualSpend', 'goalTarget', 'goals', 'goalsDone', 'targetAlloc', 'homeCurrency', 'priceProxy', 'reminderDay', 'statsId', 'statsOptOut'];
         let cloudToken = null, cloudTokenExp = 0, cloudBusy = false, cloudMsg = null;
 
         function cloudSupported() { return location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname); }
@@ -2936,6 +3123,39 @@
             const p = byId('cloud-panel');
             if (p && !p.classList.contains('hidden') && !e.target.closest('#cloud-wrap')) p.classList.add('hidden');
         });
+
+        // ===== v12 匿名更新統計：按「儲存本月」時，只送出一個隨機編號（月份由伺服器決定） =====
+        // 不送任何金額、項目、名字或 email；可以在月更新區關掉。
+        const STATS_URL = 'https://kumquat-stats.kumquat-tw.workers.dev/ping';
+        function ensureStatsId() {
+            if (appState.statsId) return appState.statsId;
+            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            const buf = new Uint8Array(16);
+            crypto.getRandomValues(buf);
+            appState.statsId = Array.from(buf, b => chars[b % chars.length]).join('');
+            saveToLocalStorage();
+            return appState.statsId;
+        }
+        function sendStatsPing() {
+            if (appState.statsOptOut || appState.isDemo || location.protocol === 'file:') return;
+            try {
+                const body = JSON.stringify({ id: ensureStatsId() });
+                const sent = navigator.sendBeacon && navigator.sendBeacon(STATS_URL, new Blob([body], { type: 'text/plain' }));
+                if (!sent) fetch(STATS_URL, { method: 'POST', body, mode: 'no-cors', keepalive: true }).catch(() => {});
+            } catch (e) { /* 統計失敗不影響任何功能 */ }
+        }
+        function renderStatsToggle() {
+            const el = byId('stats-toggle');
+            if (!el) return;
+            el.innerHTML = appState.statsOptOut
+                ? `<i class="fa-solid fa-chart-simple"></i> 匿名統計：已關閉　<button type="button" onclick="setStatsOptOut(false)" class="underline hover:text-indigo-500">開啟</button>`
+                : `<i class="fa-solid fa-chart-simple"></i> 匿名統計：儲存時只送出隨機編號，讓作者知道有多少人持續使用（不含任何金額）　<button type="button" onclick="setStatsOptOut(true)" class="underline hover:text-indigo-500">關閉</button>`;
+        }
+        function setStatsOptOut(off) {
+            if (off) appState.statsOptOut = true; else delete appState.statsOptOut;
+            saveToLocalStorage();
+            renderStatsToggle();
+        }
 
         function saveToLocalStorage() {
             try { localStorage.setItem('wealth_matrix_v5', JSON.stringify(appState)); } catch (e) {}
