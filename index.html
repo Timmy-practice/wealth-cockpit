@@ -1771,11 +1771,14 @@
         byId('im-ticker').addEventListener('input', () => byId('im-ticker-hint').classList.add('hidden'));
         document.addEventListener('keydown', e => { if (e.key === 'Escape') closeItemModal(); });
 
-        // ===== v10 網路報價：匯率直接抓 open.er-api.com；股價經使用者自己的轉送點（只送代號） =====
+        // ===== v10 網路報價：匯率直接抓 open.er-api.com；股價經轉送點（只送代號，不送金額） =====
         const FX_API = 'https://open.er-api.com/v6/latest/USD';
+        // v12：內建預設轉送點，朋友不用自己架；在齒輪裡填了自訂網址的人，照樣用自己的
+        const DEFAULT_PRICE_PROXY = 'https://wealth-price.kumquat-tw.workers.dev';
+        function priceProxyUrl() { return appState.priceProxy || DEFAULT_PRICE_PROXY; }
 
         function setPriceProxy() {
-            const v = prompt('股價轉送網址（Cloudflare Worker，例如 https://wealth-price.xxx.workers.dev）\n設定步驟寫在資料夾裡的 price-proxy-worker.js 開頭。\n留空表示只抓匯率。', appState.priceProxy || '');
+            const v = prompt('股價轉送網址（一般不用設定，已內建預設轉送點）\n只有想改用自己架的 Cloudflare Worker 時才需要填。\n留空＝使用內建轉送點。', appState.priceProxy || '');
             if (v === null) return;
             const url = v.trim().replace(/\/+$/, '');
             if (url && !/^https:\/\//i.test(url)) { alert('網址需以 https:// 開頭。'); return; }
@@ -1786,7 +1789,9 @@
 
         function updateFetchHint() {
             const el = byId('fetch-hint');
-            if (el) el.textContent = appState.priceProxy ? '股價來源：已設定轉送點（只送代號，不送金額）' : '尚未設定股價轉送點（齒輪），目前只會抓匯率';
+            if (el) el.textContent = appState.priceProxy && appState.priceProxy !== DEFAULT_PRICE_PROXY
+                ? '股價來源：你自訂的轉送點（只送代號，不送金額）'
+                : '股價來源：內建轉送點（只送代號，不送金額）';
         }
 
         // 把網路抓到的值填進某一列，並標示來源；觸發 input 事件讓「已確認」自動打勾
@@ -1836,16 +1841,14 @@
             const noShares = stockRows.filter(tr => tr.dataset.shares === '');
             noShares.forEach(tr => failed.push(`${tr.dataset.ticker}（未填股數，無法用網路價格算總金額）`));
             const rows = stockRows.filter(tr => tr.dataset.shares !== '');
-            if (rows.length && !appState.priceProxy) {
-                failed.push(`${rows.length} 檔股價（尚未設定轉送點）`);
-            } else if (rows.length) {
+            if (rows.length) {
                 try {
                     // 每個代碼可能要試好幾種寫法（2330 → 2330.TW、2330.TWO），一次最多送 30 個
                     const symbols = [...new Set(rows.flatMap(tr => tickerCandidates(tr.dataset.ticker)))];
                     const res = {};
                     for (let i = 0; i < symbols.length; i += 30) {
                         const part = symbols.slice(i, i + 30);
-                        Object.assign(res, await (await fetch(`${appState.priceProxy}?symbols=${encodeURIComponent(part.join(','))}`)).json());
+                        Object.assign(res, await (await fetch(`${priceProxyUrl()}?symbols=${encodeURIComponent(part.join(','))}`)).json());
                     }
                     let resolvedAny = false;
                     rows.forEach(tr => {
