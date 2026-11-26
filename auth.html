@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Kumquat · Google 登入</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #FFF8EE; color: #4A3728;
+         font-family: -apple-system, "Microsoft JhengHei", "PingFang TC", sans-serif; padding: 24px; box-sizing: border-box; }
+  .card { max-width: 360px; width: 100%; background: #fff; border-radius: 20px; padding: 28px 22px; text-align: center;
+          box-shadow: 0 10px 30px -12px rgba(120, 80, 40, .3); }
+  h1 { font-size: 18px; margin: 0 0 10px; }
+  p { font-size: 14px; line-height: 1.7; color: #8A6E58; margin: 8px 0; }
+  a.btn { display: block; margin-top: 18px; padding: 14px; border-radius: 14px; background: #D98B5F; color: #fff;
+          font-weight: 700; font-size: 16px; text-decoration: none; }
+  .err { color: #D9534F; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="card" id="box">
+  <h1>Google 登入</h1>
+  <p>正在前往 Google 登入…</p>
+</div>
+<script>
+// 這一頁只給「小金庫 Android App」登入 Google 用：
+// App 打開這頁（帶 state）→ 這頁轉去 Google 登入 → Google 帶著授權回到這頁 → 使用者按按鈕回到 App。
+// 授權只會交回給本 App（intent 指定了 App 的套件名稱），不會送到任何伺服器。
+(function () {
+  const CLIENT_ID = '210732467974-k48f6v9dfepgp44c3jfrd8ug9gcjug63.apps.googleusercontent.com';
+  const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  const PKG = 'com.matrixmind.wealthcockpit';
+  const REDIRECT = location.origin + location.pathname;
+  const box = document.getElementById('box');
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const query = new URLSearchParams(location.search);
+
+  // 2) Google 登入完成，帶著授權回來
+  if (hash.has('access_token') || hash.has('error')) {
+    const p = new URLSearchParams();
+    ['access_token', 'expires_in', 'state', 'error'].forEach(k => { if (hash.get(k)) p.set(k, hash.get(k)); });
+    const intentUrl = `intent://auth?${p.toString()}#Intent;scheme=kumquat;package=${PKG};end`;
+    history.replaceState(null, '', REDIRECT);   // 不把授權留在瀏覽紀錄裡
+    const ok = hash.has('access_token');
+    box.innerHTML = ok
+      ? `<h1>登入成功</h1><p>按下面的按鈕回到小金庫 App。</p><a class="btn" id="back">回到 App</a><p style="font-size:12px">如果沒有自動跳回，請按上面的按鈕。</p>`
+      : `<h1>沒有完成登入</h1><p class="err">${esc(hash.get('error'))}</p><p>按下面的按鈕回到 App，再試一次。</p><a class="btn" id="back">回到 App</a>`;
+    document.getElementById('back').href = intentUrl;
+    if (ok) setTimeout(() => { location.href = intentUrl; }, 300);
+    return;
+  }
+
+  // 1) App 剛打開這頁：轉去 Google 登入
+  const state = query.get('state');
+  if (state && /^[a-z0-9]{16,64}$/.test(state)) {
+    const g = new URLSearchParams({
+      client_id: CLIENT_ID, redirect_uri: REDIRECT, response_type: 'token', scope: SCOPE,
+      state, include_granted_scopes: 'true', prompt: 'select_account'
+    });
+    location.replace('https://accounts.google.com/o/oauth2/v2/auth?' + g.toString());
+    return;
+  }
+
+  box.innerHTML = '<h1>小金庫 · Google 登入</h1><p>這一頁是給小金庫 Android App 登入 Google 用的，請從 App 的「設定 → Google 雲端同步」開始。</p>';
+})();
+</script>
+</body>
+</html>
